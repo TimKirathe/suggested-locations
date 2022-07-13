@@ -1,5 +1,7 @@
 package com.moringaschool.suggestedlocations;
 
+import static com.moringaschool.suggestedlocations.BuildConfig.MAPS_API_KEY;
+
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
@@ -14,8 +16,10 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.IntentSender;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.location.Location;
 import android.net.Uri;
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.Handler;
 import android.provider.Settings;
@@ -45,6 +49,7 @@ import com.google.android.gms.maps.SupportMapFragment;
 import com.google.android.gms.maps.model.CameraPosition;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.MarkerOptions;
+import com.google.android.gms.maps.model.PolylineOptions;
 import com.google.android.gms.tasks.OnCompleteListener;
 import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.OnSuccessListener;
@@ -70,9 +75,22 @@ import com.mancj.materialsearchbar.SimpleOnSearchActionListener;
 import com.mancj.materialsearchbar.adapter.SuggestionsAdapter;
 import com.moringaschool.suggestedlocations.databinding.ActivityMapsBinding;
 
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.lang.reflect.Array;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Objects;
+
+import javax.net.ssl.HttpsURLConnection;
 
 import butterknife.BindView;
 import butterknife.ButterKnife;
@@ -83,6 +101,8 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
     private CameraPosition cameraPosition;
     private GoogleMap mMap;
     private LatLng nairobi;
+    private LatLng mSearchedPlace;
+    private LatLng mUserLocation;
 
     private FusedLocationProviderClient mFusedLocationProviderClient; // Responsible for fetching the current location of the device.
     private PlacesClient mPlacesClient; // Responsible for typing the suggestions a user will see as they type the address of the place they would like.
@@ -111,6 +131,33 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
         mapFragment.getMapAsync(this);
 
         mMapView = mapFragment.getView();
+
+        mButtonSearch.setEnabled(false);
+
+        mButtonSearch.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                String url = getDirectionsUrl(nairobi, mSearchedPlace);
+                DownloadTask downloadTask = new DownloadTask();
+                downloadTask.execute(url);
+            }
+        });
+    }
+
+    private String getDirectionsUrl(LatLng origin, LatLng destination) {
+        String strOrigin = "origin=" + origin.latitude + "," + origin.longitude;
+
+        String strDestination = "destination=" + destination.latitude + "," + destination.longitude;
+
+        String apiKey = "key=" + MAPS_API_KEY;
+
+        String parameters = strOrigin + "&" + strDestination + "&" + apiKey;
+
+        String outputType = "json";
+
+        String url = "https://maps.googleapis.com/maps/api/directions/" + outputType + "?" + parameters;
+
+        return url;
     }
 
     /**
@@ -141,7 +188,7 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
                         mMap.getUiSettings().setMyLocationButtonEnabled(true);
 
                         // Construct a Places Client
-                        Places.initialize(getApplicationContext(), BuildConfig.MAPS_API_KEY);
+                        Places.initialize(getApplicationContext(), MAPS_API_KEY);
                         mPlacesClient = Places.createClient(MapsActivity.this);
 
                         // Construct a FusedLocationProviderClient
@@ -248,6 +295,8 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
                                             mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(latLngOfPlace, DEFAULT_MAP_ZOOM));
                                             mMap.clear();
                                             mMap.addMarker(new MarkerOptions().position(latLngOfPlace));
+                                            mButtonSearch.setEnabled(true);
+                                            mSearchedPlace = latLngOfPlace;
                                         }
                                     }
                                 }).addOnFailureListener(new OnFailureListener() {
@@ -341,6 +390,7 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
                         if (mLocation != null) {
                             mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(new LatLng(mLocation.getLatitude(), mLocation.getLongitude()), DEFAULT_MAP_ZOOM));
                             mMap.clear();
+                            mUserLocation = new LatLng(mLocation.getLatitude(), mLocation.getLongitude());
                         } else {
                             Log.e(TAG, "Current location is null, using defaults");
                             Log.e(TAG, "Exception: ", task.getException());
@@ -374,4 +424,138 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
         super.onActivityResult(requestCode, resultCode, data);
 
     }
+
+    private class DownloadTask extends AsyncTask<String, Void, String> {
+        // Downloading data in non-ui thread
+        @Override
+        protected String doInBackground(String... urls) {
+            String data = "";
+            try {
+                data = downloadUrl(urls[0]);
+            } catch (Exception e) {
+                Log.e(TAG, e.getMessage());
+            }
+            Log.e(TAG, data);
+            return data;
+        }
+
+        @Override
+        protected void onPostExecute(String result) {
+            super.onPostExecute(result);
+            ParserTask parserTask = new ParserTask();
+            parserTask.execute(result);
+        }
+    }
+
+    private String downloadUrl(String strUrl) throws IOException {
+        String data = "";
+        String line;
+        InputStream iStream = null;
+        HttpURLConnection urlConnection = null;
+        try {
+            URL url = new URL(strUrl);
+
+            // Creating a HTTPS connection using the url.
+            urlConnection = (HttpURLConnection) url.openConnection();
+
+            // Connecting to the url
+            urlConnection.connect();
+
+            // Get input stream of data from the url connection that was established.
+            iStream = urlConnection.getInputStream();
+            Log.e(TAG, iStream.toString());
+
+            BufferedReader br = new BufferedReader(new InputStreamReader(iStream));
+
+            StringBuffer sb = new StringBuffer();
+
+            while((line = br.readLine()) != null) {
+                sb.append(line);
+            }
+
+            data = sb.toString();
+
+//            Log.e("Data from url", data);
+            br.close();
+        } catch (IOException e) {
+            Log.e(TAG, e.getMessage());
+        } finally {
+            iStream.close();
+            urlConnection.disconnect();
+        }
+
+        return data;
+    }
+
+    private class ParserTask extends AsyncTask<String, Integer, List<List<HashMap<String, String>>>> {
+        @Override
+        protected List<List<HashMap<String, String>>> doInBackground(String... jsonData) {
+            JSONObject jsonObject;
+            List<List<HashMap<String, String>>> routes = null;
+            try {
+                jsonObject = new JSONObject(jsonData[0]);
+                DirectionsJSONParser jsonParser = new DirectionsJSONParser();
+
+                routes = jsonParser.parse(jsonObject);
+//                Log.e("Data routes", routes.get(0).toString());
+            } catch (Exception e) {
+                Log.e(TAG, e.getMessage());
+            }
+            return routes;
+        }
+
+        @Override
+        protected void onPostExecute(List<List<HashMap<String, String>>> results) {
+            super.onPostExecute(results);
+
+            if(results.size() < 1) {
+                Toast.makeText(MapsActivity.this, "No Points Found!", Toast.LENGTH_SHORT);
+            }
+
+            PolylineOptions polylineOptions = new PolylineOptions();
+            ArrayList<LatLng> points = new ArrayList<>();
+
+            List<HashMap<String, String>> path1 = results.get(0);
+            Log.e("Path1", path1.toString());
+
+            String distance = path1.get(0).get("distance");
+            String duration = path1.get(1).get("duration");
+
+            Log.e("Distance & Duration", distance + " " + duration);
+
+            for(int i = 2; i < path1.size(); i++) {
+                double lat = Double.parseDouble(Objects.requireNonNull(path1.get(i).get("lat")));
+                double lng = Double.parseDouble(Objects.requireNonNull(path1.get(i).get("lng")));
+                LatLng latLng = new LatLng(lat, lng);
+                points.add(latLng);
+            }
+
+            Log.e("point1", String.valueOf(points.size()));
+            polylineOptions.addAll(points);
+            polylineOptions.width(15);
+            polylineOptions.color(Color.CYAN);
+
+            mMap.addPolyline(polylineOptions);
+
+//            for(int i = 0; i < results.size(); i++) {
+//                List<HashMap<String, String>> paths = results.get(i);
+//
+//                for(int j = 0; j < paths.size(); j++) {
+//                    HashMap<String, String> path = paths.get(j);
+//                    Log.e("Data routes", path.toString());
+//                    double lat = Double.parseDouble(Objects.requireNonNull(path.get("lat")));
+//                    double lng = Double.parseDouble(Objects.requireNonNull(path.get("lng")));
+//                    LatLng latLng = new LatLng(lat, lng);
+//                    points.add(latLng);
+//                }
+//
+//                polylineOptions.addAll(points);
+//                polylineOptions.width(15);
+//                polylineOptions.color(Color.CYAN);
+//            }
+//
+//            mMap.addPolyline(polylineOptions);
+        }
+    }
+
 }

@@ -46,7 +46,7 @@
         android:layout_height="wrap_content"
         android:layout_margin="16dp"
         android:backgroundTint="@color/teaGreen"
-        android:text="Search"
+        android:text="Directions"
         android:textColor="@color/white"
         android:textSize="17sp"
         android:textStyle="bold"
